@@ -3,6 +3,7 @@ langchain-community
 langchain-groq
 langchain-core
 langchain-text-splitters
+langchain-huggingface
 faiss-cpu
 pymupdf
 sentence-transformers
@@ -10,3 +11,5 @@ fastapi
 uvicorn
 python-dotenv
 python-multipart
+chromadb
+pypdf
