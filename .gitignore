@@ -1,6 +1,5 @@
 venv/
-faiss_index/
-uploaded.pdf
+
 __pycache__/
 *.pyc
 .env
