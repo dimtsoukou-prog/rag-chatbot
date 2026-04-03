@@ -1,72 +1,64 @@
+import streamlit as st
 import os
-import fitz
+from rag import extract_text_from_pdf, split_text, create_vector_store, load_rag_chain
 from dotenv import load_dotenv
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.documents import Document
 
 load_dotenv()
 
-def extract_text_from_pdf(pdf_path: str) -> str:
-    doc = fitz.open(pdf_path)
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+# Ρύθμιση σελίδας για να φαίνεται ωραίο στο WordPress iframe
+st.set_page_config(page_title="PDF Chatbot", layout="centered")
 
-def split_text(text: str) -> list:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=100
-    )
-    chunks = splitter.split_text(text)
-    return [Document(page_content=t) for t in chunks]
+st.title("🤖 AI Assistant")
+st.info("Ανέβασε ένα PDF για να ξεκινήσουμε τη συζήτηση.")
 
-def create_vector_store(chunks: list):
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-    vector_store = FAISS.from_documents(chunks, embeddings)
-    vector_store.save_local("faiss_index")
-    print(f"✅ Vector store created with {len(chunks)} chunks")
+# Χρησιμοποιούμε cache για να μην φορτώνει το μοντέλο σε κάθε κλικ
+@st.cache_resource
+def get_chain():
+    # Αν δεν υπάρχει ήδη το index, επιστρέφουμε None
+    if not os.path.exists("faiss_index"):
+        return None
+    chain, retriever = load_rag_chain()
+    return chain
 
-def load_rag_chain():
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-    vector_store = FAISS.load_local(
-        "faiss_index",
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+# --- Sidebar για το Upload ---
+with st.sidebar:
+    st.header("Ρυθμίσεις")
+    uploaded_file = st.file_uploader("Επιλογή PDF", type="pdf")
+    
+    if st.button("Ανάλυση Αρχείου"):
+        if uploaded_file:
+            with st.spinner("Γίνεται επεξεργασία..."):
+                # Αποθήκευση και επεξεργασία
+                with open("temp.pdf", "wb") as f:
+                    f.write(uploaded_file.getvalue())
+                
+                text = extract_text_from_pdf("temp.pdf")
+                chunks = split_text(text)
+                create_vector_store(chunks)
+                st.success("Έτοιμο! Τώρα μπορείς να ρωτήσεις.")
+                st.rerun() # Refresh για να δει το νέο index
 
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY"),
-        temperature=0
-    )
+# --- Chat Interface ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    prompt = ChatPromptTemplate.from_template("""
-    Answer the question based only on the following context:
-    {context}
-    Question: {question}
+# Εμφάνιση ιστορικού
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
 
-    Helpful Answer:""")
+# Ερώτηση χρήστη
+if prompt := st.chat_input("Πώς μπορώ να βοηθήσω;"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.chat_message("user").write(prompt)
 
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-
-    chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-
-    return chain, retriever
+    # Φόρτωση του chain
+    chain = get_chain()
+    
+    if chain:
+        with st.chat_message("assistant"):
+            with st.spinner("Σκέφτομαι..."):
+                response = chain.invoke(prompt)
+                st.write(response)
+                st.session_state.messages.append({"role": "assistant", "content": response})
+    else:
+        st.error("Παρακαλώ ανέβασε πρώτα ένα αρχείο PDF από το πλάι.")
